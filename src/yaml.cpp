@@ -3,12 +3,61 @@
 
 #include <boost/container/small_vector.hpp>
 #include <boost/any.hpp>
+#include <boost/mpl/assert.hpp>
 
 
 namespace boost { namespace yaml {
 
     namespace bp = ::boost::parser;
     using namespace bp::literals;
+
+#if 0
+    // TODO: SBO.
+    struct any_iterator
+    {
+        any_iterator() {}
+        template<typename Iter>
+        any_iterator(Iter it) : ptr_(new impl<Iter>(it))
+        {}
+
+        explicit operator bool() const noexcept { return ptr_; }
+
+        bool operator==(any_iterator const & other) const noexcept
+        {
+            BOOST_ASSERT(ptr_);
+            ptr_->equal(other);
+        }
+
+        template<typename Iter>
+        friend Iter cast(any_iterator const & it) noexcept
+        {
+            BOOST_ASSERT(dynamic_cast<impl<Iter> const *>(it.ptr_.get()));
+            return static_cast<impl<Iter> const *>(it.ptr_.get())->value_;
+        }
+
+    private:
+        struct impl_base
+        {
+            virtual ~impl_base() = 0;
+            virtual bool equal(any_iterator const & other) = 0;
+        };
+
+        template<typename Iter>
+        struct impl : impl_base
+        {
+            impl(Iter it) : value_(it) {}
+            virtual ~impl() {}
+            virtual bool equal(any_iterator const & other)
+            {
+                return value_ == cast<Iter>(other);
+            }
+
+            Iter value_;
+        };
+
+        std::unique_ptr<impl_base> ptr_;
+    };
+#endif
 
     using parser_map_element = hana::tuple<value, value>;
 
@@ -75,19 +124,20 @@ namespace boost { namespace yaml {
     struct parser_properties
     {
         std::string tag_;
-        any anchor_; // iterator range
+        std::string anchor_str_;
+        any/*_iterator TODO*/ anchor_first_; // iterator
     };
 
     inline std::ostream &
     operator<<(std::ostream & out, parser_properties const & p)
     {
-        return out << p.tag_ << ",<<unprintable-pos>>";
+        return out << p.tag_ << "," << p.anchor_str_ << ",<<unprintable-pos>>";
     }
 
     struct anchor
     {
         alias alias_;
-        any position_; // iterator
+        any/*_iterator TODO*/ position_; // iterator
     };
 
     inline std::ostream & operator<<(std::ostream & out, anchor const & a)
@@ -125,6 +175,8 @@ namespace boost { namespace yaml {
         bool yaml_directive_seen_ = false;
         iterator first_yaml_directive_it_;
         iterator latest_yaml_directive_it_;
+
+        parser_properties parser_properties_;
 
         std::string tag_handle_;
         iterator tag_handle_it_;
@@ -370,13 +422,7 @@ namespace boost { namespace yaml {
         "reserved_directive";
 
     // [86]
-    struct yaml_directive_state
-    {
-        any position_range_; // iterator range
-        int version_;
-    };
-    bp::rule<class yaml_directive, bp::no_attribute, yaml_directive_state> const
-        yaml_directive = "yaml_directive";
+    bp::rule<class yaml_directive> const yaml_directive = "yaml_directive";
 
     // [88]
     // any as iterator_range
@@ -391,13 +437,8 @@ namespace boost { namespace yaml {
     // 6.9 Node Properties
 
     // [96]
-    struct properties_state
-    {
-        std::string str_; // TODO: Needs name.
-        any position_;    // iterator range
-    };
-    bp::rule<class properties_t, parser_properties, properties_state> const
-        properties = "properties";
+    bp::rule<class properties_t, parser_properties> const properties_rule =
+        "properties";
 
     // [97]
     bp::rule<class shorthand_tag_name, std::string> const shorthand_tag_name =
@@ -822,8 +863,7 @@ namespace boost { namespace yaml {
         block_in_block = "block_in_block";
 
     // [199]
-    bp::rule<class block_scalar, value, parser_properties> const block_scalar =
-        "block_scalar";
+    bp::rule<class block_scalar, value> const block_scalar = "block_scalar";
 
     // [200]
     bp::rule<class block_collection, value> const block_collection =
@@ -1075,19 +1115,16 @@ namespace boost { namespace yaml {
         auto & globals = _globals(ctx);
 
         if (globals.yaml_directive_seen_) {
-#if 0 // TODO
-            scoped_multipart_error_t multipart(error_handler.impl());
-            error_handler.impl().report_error_at(
-                state.latest_yaml_directive_it_,
+            _report_error(
+                ctx,
                 "The current document has more than one %YAML "
                 "directive.  Only one is allowed.  The latest "
                 "one is here",
-                multipart);
-            error_handler.impl().report_error_at(
-                state.first_yaml_directive_it_,
+                globals.latest_yaml_directive_it_);
+            _report_error(
+                ctx,
                 "The first one was was here",
-                multipart);
-#endif
+                globals.first_yaml_directive_it_);
             _pass(ctx) = false;
         } else {
             using namespace hana::literals;
@@ -1096,16 +1133,12 @@ namespace boost { namespace yaml {
             globals.first_yaml_directive_it_ =
                 globals.latest_yaml_directive_it_;
             if (major != 1) {
-#if 0 // TODO
-                scoped_multipart_error_t multipart(error_handler.impl());
                 std::ostringstream oss;
                 oss << "The current document has a %YAML " << major << '.'
                     << minor
                     << " directive.  This parser recognizes "
                        "YAML 1.2, and so cannot continue";
-                error_handler.impl().report_error_at(
-                    state.first_yaml_directive_it_, oss.str(), multipart);
-#endif
+                _report_error(ctx, oss.str(), globals.first_yaml_directive_it_);
                 _pass(ctx) = false;
             } else if (minor != 2) {
                 std::ostringstream oss;
@@ -1165,20 +1198,16 @@ namespace boost { namespace yaml {
         }
 
         if (existing_tag) {
-#if 0 // TODO
-            auto const & error_handler = _error_handler(ctx);
-            scoped_multipart_error_t multipart(error_handler.impl());
             std::ostringstream oss;
             oss << "The current document has more than one %TAG "
                 << "directive using the handle " << globals.tag_handle_ << ".  "
                 << "Only one is allowed.  The latest one is here";
-            error_handler.impl().report_error_at(
-                handle_range.begin(), oss.str(), multipart);
-            error_handler.impl().report_error_at(
-                existing_tag->position_,
+            _report_error(ctx, oss.str(), globals.tag_handle_it_);
+            using iterator_t = decltype(globals.tag_handle_it_);
+            _report_error(
+                ctx,
                 "The first one was was here",
-                multipart);
-#endif
+                boost::any_cast<iterator_t>(existing_tag->position_));
             _pass(ctx) = false;
         } else {
             tags.insert(
@@ -1215,18 +1244,24 @@ namespace boost { namespace yaml {
         _globals(ctx).anchor_property_ = _attr(ctx);
     };
 
-    auto make_parser_properties = [](auto & ctx) {
-        auto const & globals = _globals(ctx);
-        _val(ctx) = parser_properties{std::move(globals.tag_property_),
-                                      globals.anchor_property_};
+    auto save_properties = [](auto & ctx) {
+        auto & globals = _globals(ctx);
+        auto r = globals.anchor_property_;
+        auto f =
+            boost::text::utf8::make_from_utf32_iterator<decltype(r.begin())>(
+                r.begin(), r.begin(), r.end());
+        auto l =
+            boost::text::utf8::make_from_utf32_iterator<decltype(r.begin())>(
+                r.begin(), r.end(), r.end());
+        globals.properties_ = parser_properties{
+            std::move(globals.tag_property_), std::string(f, l), r.begin()};
     };
 
     // [96]
-    auto const properties_def =
+    auto const properties_rule_def =
         (tag_property[assign_tag_property] >> -(separate >> anchor_property) |
          anchor_property >>
-             -(separate >>
-               tag_property[assign_tag_property]))[make_parser_properties];
+             -(separate >> tag_property[assign_tag_property]))[save_properties];
 
     auto shorthand_tag_str = [](auto & ctx) {
         using namespace hana::literals;
@@ -1569,57 +1604,70 @@ namespace boost { namespace yaml {
     // TODO: Use Niabelek trick to perform a typesafe parse after properties.
 
     auto handle_properties = [](auto & ctx) {
-    // TODO
-#if 0
-        ast::properties_t properties;
-        properties.tag_ = parser_properties.tag_;
+        using namespace hana::literals;
 
-        if (!parser_properties.anchor_.empty()) {
-            properties.anchor_ = range_to_string(parser_properties.anchor_);
+        parser_properties & parser_props = _globals(ctx).parser_properties_;
 
-            anchor_t anchor;
-            std::shared_ptr<ast::value_t> anchor_ptr(new ast::value_t(x));
-            anchor.alias_ = ast::alias_t(properties.anchor_, anchor_ptr);
-            anchor.position_ = parser_properties.anchor_.begin();
+        properties props;
+        props.tag_ = parser_props.tag_;
 
-            auto existing_anchor = anchors.find(properties.anchor_);
-            if (existing_anchor && error_handler.impl().warning_fn_) {
+        BOOST_MPL_ASSERT(
+            (std::is_same<value, std::decay_t<decltype(_attr(ctx)[0_c])>>));
+
+        if (!parser_props.anchor_str_.empty()) {
+            props.tag_ = parser_props.anchor_str_;
+
+            anchor anchor;
+            auto anchor_ptr = std::make_shared<value const>(_attr(ctx)[0_c]);
+            anchor.alias_ = alias(props.anchor_, anchor_ptr);
+            anchor.position_ = parser_props.anchor_first_;
+
+            auto existing_anchor = anchors.find(ctx, props.anchor_);
+            if (existing_anchor) {
+                using iterator_t = decltype(_globals(ctx).tag_handle_it_);
                 std::ostringstream oss;
-                oss << "Redefining anchor " << properties.anchor_;
-                error_handler.impl().report_warning_at(
-                    parser_properties.anchor_.begin(), oss.str());
-                error_handler.impl().report_warning_at(
-                    existing_anchor->position_,
-                    "The previous one was was here");
+                oss << "Redefining anchor " << props.anchor_;
+                _report_warning(
+                    ctx,
+                    oss.str(),
+                    boost::any_cast<iterator_t>(parser_props.anchor_first_));
+                _report_warning(
+                    ctx,
+                    "The previous one was was here",
+                    boost::any_cast<iterator_t>(existing_anchor->position_));
             }
 
-            anchors.remove(properties.anchor_);
-            anchors.add(properties.anchor_, anchor);
+            anchors.erase(ctx, props.anchor_);
+            anchors.insert(ctx, props.anchor_, anchor);
         }
 
-        if (properties) {
-            return ast::value_t(
-                ast::properties_node_t(properties, ast::value_t(x)));
+        if (!props.tag_.empty() || !props.anchor_.empty()) {
+            _val(ctx) = value(
+                property_node{std::move(props), std::move(_attr(ctx)[0_c])});
+        } else {
+            _val(ctx) = std::move(_attr(ctx)[0_c]);
         }
-
-        return ast::value_t(x);
-#endif
     };
 
     // [159]
     auto const flow_yaml_node_def =
         alias_node | flow_yaml_content |
-        (properties >> (separate >> flow_yaml_content |
-                        bp::attr(value())))[handle_properties];
+        (properties_rule >> (separate >> flow_yaml_content |
+                             bp::attr(value())))[handle_properties];
+
+    auto const clear_properties = [](auto & ctx) {
+        _globals(ctx).parser_properties_ = parser_properties();
+    };
 
     // [160]
     auto const flow_json_node_def =
-        (-(properties >> separate) >> flow_json_content)[handle_properties];
+        ((properties_rule >> separate | bp::eps[clear_properties]) >>
+         flow_json_content)[handle_properties];
 
     // [161]
     auto const flow_node_def =
         alias_node | flow_content |
-        (properties >>
+        (properties_rule >>
          (separate >> flow_content | bp::attr(value())))[handle_properties];
 
 
@@ -1864,23 +1912,19 @@ namespace boost { namespace yaml {
         _val(ctx) = (std::max)(_val(ctx), _locals(ctx));
     };
     auto const check_scalar_indentation = [](auto & ctx) {
-        if (_val(ctx) <= _locals(ctx)) {
-            _val(ctx) = _locals(ctx);
+        auto this_line_indent = _locals(ctx);
+        if (_val(ctx) <= this_line_indent) {
+            _val(ctx) = this_line_indent;
         } else {
             auto const where = _where(ctx);
-            (void)where; // TODO
-#if 0
-            scoped_multipart_error_t multipart(error_handler.impl());
             std::ostringstream oss;
-            oss << "The first non-space character of a block-scalar "
+            oss << "The first non-space character of a block-scalar"
                 << "(text beginning with '|' or '>') must be at least "
                 << "as indented as all its leading empty lines.  "
                 << "This line is indented " << this_line_indent
-                << " spaces, but a previous line was indented " << max_indent
+                << " spaces, but a previous line was indented " << _val(ctx)
                 << " spaces:\n";
-            error_handler.impl().report_error_at(
-                range.begin(), oss.str(), multipart);
-#endif
+            _report_error(ctx, oss.str(), where.begin());
             _pass(ctx) = false;
         }
     };
@@ -1989,15 +2033,11 @@ namespace boost { namespace yaml {
     // [198]
     auto const block_in_block_def = block_scalar | block_collection;
 
-    auto const move_to_local = [](auto & ctx) {
-        _locals(ctx) = std::move(_attr(ctx));
-    };
-
     // [199]
-    auto const
-        block_scalar_def = bp::eps[incr_indent] >> separate >>
-                           -bp::omit[properties[move_to_local] >> separate] >>
-                           (literal | folded)[handle_properties];
+    auto const block_scalar_def = bp::eps[incr_indent] >> separate >>
+                                  (properties_rule >> separate |
+                                   bp::eps[clear_properties]) >>
+                                  (literal | folded)[handle_properties];
 
     auto const seq_spaces = [](auto & ctx) {
         return indent_(ctx) - (context_(ctx) == context::block_out ? 1 : 0);
@@ -2005,21 +2045,11 @@ namespace boost { namespace yaml {
 
     // [200]
     auto const block_collection_def =
-        // clang-format off
-            s_l_comments
-        >>  (
-                block_sequence.with(seq_spaces)
-            |   block_mapping
-            )
-        |   bp::eps[incr_indent]
-        >>  bp::omit[separate >> properties]
-        >>  s_l_comments
-        >>  (
-                block_sequence.with(seq_spaces)
-            |   block_mapping
-            )[handle_properties]
-        // clang-format on
-        ;
+        s_l_comments >> (block_sequence.with(seq_spaces) | block_mapping) |
+        bp::eps[incr_indent] >>
+            (separate >> properties_rule | bp::eps[clear_properties]) >>
+            s_l_comments >> (block_sequence.with(seq_spaces) |
+                             block_mapping)[handle_properties];
 
     // 9.1. Documents
 
@@ -2127,7 +2157,7 @@ namespace boost { namespace yaml {
         tag_directive,
         tag_handle,
         tag_prefix,
-        properties,
+        properties_rule,
         shorthand_tag_name,
         tag_property,
         anchor_property);
