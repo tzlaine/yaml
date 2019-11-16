@@ -1630,6 +1630,16 @@ namespace boost { namespace parser {
 
         template<typename Iter, typename Sentinel>
         using sentinel_for = is_detected<eq_comparable, Iter, Sentinel>;
+
+        template<typename Range>
+        constexpr auto make_range(Range && r) noexcept
+        {
+            if constexpr (std::is_pointer<std::decay_t<Range>>::value) {
+                return parser::make_range(r, text::null_sentinel{});
+            } else {
+                return parser::make_range(r.begin(), r.end());
+            }
+        }
     }
 
 
@@ -5533,8 +5543,6 @@ namespace boost { namespace parser {
 
     // Parse API.
 
-    // TODO: std::string_view -> range/ptr
-
     /** Parses `[first, last)` using `parser`, and returns whether the parse
         was successful.  On success, `attr` will be assigned the value of the
         attribute produced by `parser`.  If `trace_mode == trace::on`, a
@@ -5569,18 +5577,21 @@ namespace boost { namespace parser {
         attribute produced by `parser`.  If `trace_mode == trace::on`, a
         verbose trace of the parse will be streamed to `std::cout`. */
     template<
+        typename Range,
         typename Parser,
         typename GlobalState,
         typename ErrorHandler,
-        typename Attr>
+        typename Attr,
+        typename Enable = detail::range_t<Range>>
     bool parse(
-        std::string_view str,
+        Range const & range,
         parser_interface<Parser, GlobalState, ErrorHandler> const & parser,
         Attr & attr,
         trace trace_mode = trace::off)
     {
-        auto first = str.begin();
-        auto const last = str.end();
+        auto r = detail::make_range(range);
+        auto first = r.begin();
+        auto const last = r.end();
         return parser::parse(first, last, parser, attr, trace_mode);
     }
 
@@ -5615,14 +5626,20 @@ namespace boost { namespace parser {
         attribute produced by `parser` on parse success, and `std::nullopt` on
         parse failure.  If `trace_mode == trace::on`, a verbose trace of the
         parse will be streamed to `std::cout`. */
-    template<typename Parser, typename GlobalState, typename ErrorHandler>
+    template<
+        typename Range,
+        typename Parser,
+        typename GlobalState,
+        typename ErrorHandler,
+        typename Enable = detail::range_t<Range>>
     auto parse(
-        std::string_view str,
+        Range const & range,
         parser_interface<Parser, GlobalState, ErrorHandler> const & parser,
         trace trace_mode = trace::off)
     {
-        auto first = str.begin();
-        auto const last = str.end();
+        auto r = detail::make_range(range);
+        auto first = r.begin();
+        auto const last = r.end();
         return parser::parse(first, last, parser, trace_mode);
     }
 
@@ -5680,18 +5697,21 @@ namespace boost { namespace parser {
         occurs.  If `trace_mode == trace::on`, a verbose trace of the parse
         will be streamed to `std::cout`. */
     template<
+        typename Range,
         typename Parser,
         typename GlobalState,
         typename ErrorHandler,
-        typename Callbacks>
+        typename Callbacks,
+        typename Enable = detail::range_t<Range>>
     bool callback_parse(
-        std::string_view str,
+        Range const & range,
         parser_interface<Parser, GlobalState, ErrorHandler> const & parser,
         Callbacks const & callbacks,
         trace trace_mode = trace::off)
     {
-        auto first = str.begin();
-        auto const last = str.end();
+        auto r = detail::make_range(range);
+        auto first = r.begin();
+        auto const last = r.end();
         return parser::callback_parse(first, last, parser, callbacks);
     }
 
@@ -5734,20 +5754,23 @@ namespace boost { namespace parser {
         of the attribute produced by `parser`.  If `trace_mode == trace::on`,
         a verbose trace of the parse will be streamed to `std::cout`. */
     template<
+        typename Range,
         typename Parser,
         typename GlobalState,
         typename ErrorHandler,
         typename SkipParser,
-        typename Attr>
+        typename Attr,
+        typename Enable = detail::range_t<Range>>
     bool skip_parse(
-        std::string_view str,
+        Range const & range,
         parser_interface<Parser, GlobalState, ErrorHandler> const & parser,
         SkipParser const & skip,
         Attr & attr,
         trace trace_mode = trace::off)
     {
-        auto first = str.begin();
-        auto const last = str.end();
+        auto r = detail::make_range(range);
+        auto first = r.begin();
+        auto const last = r.end();
         return parser::skip_parse(first, last, parser, skip, attr, trace_mode);
     }
 
@@ -5788,18 +5811,21 @@ namespace boost { namespace parser {
         `std::nullopt` on parse failure.  If `trace_mode == trace::on`, a
         verbose trace of the parse will be streamed to `std::cout`. */
     template<
+        typename Range,
         typename Parser,
         typename GlobalState,
         typename ErrorHandler,
-        typename SkipParser>
+        typename SkipParser,
+        typename Enable = detail::range_t<Range>>
     auto skip_parse(
-        std::string_view str,
+        Range const & range,
         parser_interface<Parser, GlobalState, ErrorHandler> const & parser,
         SkipParser const & skip,
         trace trace_mode = trace::off)
     {
-        auto first = str.begin();
-        auto const last = str.end();
+        auto r = detail::make_range(range);
+        auto first = r.begin();
+        auto const last = r.end();
         return parser::skip_parse(first, last, parser, skip, trace_mode);
     }
 
@@ -5861,20 +5887,23 @@ namespace boost { namespace parser {
         occurs.  If `trace_mode == trace::on`, a verbose trace of the parse
         will be streamed to `std::cout`. */
     template<
+        typename Range,
         typename Parser,
         typename GlobalState,
         typename ErrorHandler,
         typename SkipParser,
-        typename Callbacks>
+        typename Callbacks,
+        typename Enable = detail::range_t<Range>>
     bool callback_skip_parse(
-        std::string_view str,
+        Range const & range,
         parser_interface<Parser, GlobalState, ErrorHandler> const & parser,
         SkipParser const & skip,
         Callbacks const & callbacks,
         trace trace_mode = trace::off)
     {
-        auto first = str.begin();
-        auto const last = str.end();
+        auto r = detail::make_range(range);
+        auto first = r.begin();
+        auto const last = r.end();
         return parser::skip_parse(
             first, last, parser, skip, callbacks, trace_mode);
     }
